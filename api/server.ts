@@ -499,6 +499,16 @@ app.post('/api/signup', async (req, res) => {
                                                                                                                                                                                                                       res.status(500).json({ error: '서버 오류가 발생했습니다.' });
                                                                                                                                                                                                                         }
                                                                                                                                                                                                                         });
+                                                                                                                                                                                                                        // ⭕ 이 로그아웃 처리 코드를 새로 추가해주세요!
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('token', {
+    path: '/',
+    secure: true,      // Vercel 배포 환경 필수
+    sameSite: 'none'   // 크로스 도메인 환경 필수
+  });
+  return res.status(200).json({ message: '로그아웃 성공' });
+});
+
                                                                                                                                                                                                                         
 
 // -------------------------------------------------------------------------
@@ -532,8 +542,55 @@ app.post('/api/auth/logout', async (req, res) => {
     return res.status(500).json({ error: '로그아웃 에러 발생' });
   }
 });
+// ... (기존 API 코드들) ...
 
+// ================= [여기서부터 복사해서 붙여넣으세요!] =================
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const token = req.cookies?.token;
+
+    if (token) {
+      try {
+        await sql`
+          DELETE FROM user_sessions 
+          WHERE session_token = ${token}
+        `;
+      } catch (dbError) {
+        console.log('DB 세션 삭제 건너뜀:', dbError);
+      }
+    }
+
+    // 일반 환경용 쿠키 'token' 삭제
+    res.clearCookie('token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
+
+    // Codespaces 등 프록시 개발 환경용 쿠키 'token' 삭제
+    res.clearCookie('token', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      path: '/',
+    });
+
+    return res.status(200).json({ success: true, message: '로그아웃 성공' });
+  } catch (error) {
+    console.error('로그아웃 에러:', error);
+    res.clearCookie('token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/' });
+    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'none', path: '/' });
+    return res.status(500).json({ error: '로그아웃 에러 발생' });
+  }
+});
+// ===================================================================
+
+// 🌟 기존에 맨 아래에 있던 이 함수 바로 위에 자리 잡으면 성공입니다!
 async function startServer() {
+  const distPath = path.join(process.cwd(), 'dist');
+  // ... 생략
+}
 if (process.env.NODE_ENV !== 'production') {
       // 💡 개발 환경일 때만 dynamic import로 Vite를 불러옵니다!
           const { createServer } = await import('vite');
@@ -555,9 +612,8 @@ if (process.env.NODE_ENV !== 'production') {
                                                                     if (process.env.NODE_ENV !== 'production') {
                                                                         app.listen(PORT, '0.0.0.0', () => {
                                                                             console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
-                                                                              });
-                                                                              }
-                                                                    }
+                                                                              });}
+                                        
 
 
 
