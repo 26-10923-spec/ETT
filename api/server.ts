@@ -500,7 +500,15 @@ app.post('/api/signup', async (req, res) => {
                                                                                                                                                                                                                         }
                                                                                                                                                                                                                         });
                                                                                                                                                                                                                         // ⭕ 이 로그아웃 처리 코드를 새로 추가해주세요!
-app.post('/api/auth/logout', (req, res) => {
+
+app.post('/api/signup', async (req, res) => {
+  try {
+    // 회원가입 로직...
+  } catch (error) {
+    // 에러 처리...
+  }
+}); // 💡 이 닫는 괄호들이 잘 붙어있는지 꼭 확인하세요!
+                                                                                                                                                                                                                        app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('token', {
     path: '/',
     secure: true,      // Vercel 배포 환경 필수
