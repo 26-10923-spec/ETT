@@ -6,7 +6,8 @@ import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 
 // 첫 번째 사진에서 설정한 STORAGE_URL로 DB를 연결합니다.
-const sql = neon(process.env.STORAGE_URL!);
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const sql = neon(connectionString || '');
 
 dotenv.config();
 
