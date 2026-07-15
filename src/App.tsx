@@ -151,7 +151,7 @@ export default function App() {
       const users: Record<string, any> = usersStr ? JSON.parse(usersStr) : {};
       
       const existingUser = users[userId];
-      users[userId] = {
+      const updatedUser = {
         userId,
         password: existingUser?.password || password || '1234', // keep original password
         villageName,
@@ -160,12 +160,33 @@ export default function App() {
         lastAnalysisResult,
         analysisHistory,
       };
+      users[userId] = updatedUser;
       localStorage.setItem('eco_registered_users', JSON.stringify(users));
+
+      // Sync with cloud Neon PostgreSQL DB in background!
+      fetch('/api/user/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updatedUser)
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.fallback) {
+          console.log('Synced locally: DB offline.');
+        } else {
+          console.log('Successfully synced state to Neon cloud database.');
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to sync state to cloud database:', err);
+      });
     }
   }, [isLoggedIn, userId, villageName, points, placedItems, lastAnalysisResult, analysisHistory]);
 
-  // Handle Real Login
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  // Handle Real Login with Neon DB
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanId = userId.trim();
     const cleanPassword = password.trim();
@@ -179,35 +200,43 @@ export default function App() {
       return;
     }
 
-    const usersStr = localStorage.getItem('eco_registered_users');
-    const users: Record<string, any> = usersStr ? JSON.parse(usersStr) : {};
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: cleanId, password: cleanPassword })
+      });
 
-    const user = users[cleanId];
-    if (!user) {
-      alert('가입되지 않은 아이디입니다. 먼저 회원가입을 완료해 주세요!');
-      return;
+      if (!response.ok) {
+        const errorData = await response.json();
+        alert(`❌ 로그인 실패: ${errorData.error || '아이디 또는 비밀번호가 올바르지 않습니다.'}`);
+        return;
+      }
+
+      const data = await response.json();
+      const user = data.user;
+
+      // Load user profile from DB response
+      setUserId(user.userId);
+      setPassword(cleanPassword);
+      setVillageName(user.villageName);
+      setPoints(user.points);
+      setPlacedItems(user.placedItems || []);
+      setLastAnalysisResult(user.lastAnalysisResult || initialResult);
+      setAnalysisHistory(user.analysisHistory || []);
+      setIsLoggedIn(true);
+
+      alert(`👋 어서 오세요, ${user.userId}님! 에코 타운에 성공적으로 로그인되었습니다.`);
+    } catch (error: any) {
+      console.error('Login error:', error);
+      alert('❌ 로그인 처리 중 서버와의 연결에 실패했습니다. (DATABASE_URL 설정 확인 필요)');
     }
-
-    if (user.password !== cleanPassword) {
-      alert('비밀번호가 올바르지 않습니다!');
-      return;
-    }
-
-    // Load user profile
-    setUserId(user.userId);
-    setPassword(user.password);
-    setVillageName(user.villageName || `${user.userId}의 에코 타운`);
-    setPoints(user.points !== undefined ? user.points : 2000);
-    setPlacedItems(user.placedItems || []);
-    setLastAnalysisResult(user.lastAnalysisResult || initialResult);
-    setAnalysisHistory(user.analysisHistory || []);
-    setIsLoggedIn(true);
-    
-    alert(`👋 어서 오세요, ${user.userId}님! 에코 타운에 성공적으로 로그인되었습니다.`);
   };
 
-  // Handle Real Sign Up
-  const handleSignUpSubmit = (e: React.FormEvent) => {
+  // Handle Real Sign Up with Neon DB
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanId = signUpId.trim();
     const cleanPassword = signUpPassword.trim();
@@ -222,44 +251,49 @@ export default function App() {
       return;
     }
 
-    const usersStr = localStorage.getItem('eco_registered_users');
-    const users: Record<string, any> = usersStr ? JSON.parse(usersStr) : {};
+    try {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: cleanId,
+          password: cleanPassword,
+          villageName: cleanVillageName
+        })
+      });
 
-    if (users[cleanId]) {
-      alert('이미 사용 중인 아이디입니다. 다른 아이디를 입력해 주세요!');
-      return;
+      if (!response.ok) {
+        const errorData = await response.json();
+        alert(`❌ 회원가입 실패: ${errorData.error || '이미 존재하는 아이디입니다.'}`);
+        return;
+      }
+
+      const data = await response.json();
+      const user = data.user;
+
+      alert('🎉 회원가입이 성공적으로 완료되었습니다! 가입하신 에코 빌리저 계정으로 로그인합니다.');
+
+      // Automatically log in newly created user
+      setUserId(user.userId);
+      setPassword(cleanPassword);
+      setVillageName(user.villageName);
+      setPoints(user.points);
+      setPlacedItems(user.placedItems || []);
+      setLastAnalysisResult(initialResult);
+      setAnalysisHistory([]);
+      setIsLoggedIn(true);
+
+      // Reset signup inputs
+      setSignUpId('');
+      setSignUpPassword('');
+      setSignUpVillageName('');
+      setIsSignUpMode(false);
+    } catch (error: any) {
+      console.error('Signup error:', error);
+      alert('❌ 회원가입 처리 중 서버와의 연결에 실패했습니다. (DATABASE_URL 설정 확인 필요)');
     }
-
-    // Register user
-    const newUser = {
-      userId: cleanId,
-      password: cleanPassword,
-      villageName: cleanVillageName,
-      points: 2000,
-      placedItems: [],
-      lastAnalysisResult: initialResult,
-      analysisHistory: [],
-    };
-    users[cleanId] = newUser;
-    localStorage.setItem('eco_registered_users', JSON.stringify(users));
-
-    alert('🎉 회원가입이 완료되었습니다! 가입하신 에코 빌리저 계정으로 자동 로그인합니다.');
-
-    // Automatically log in newly created user
-    setUserId(cleanId);
-    setPassword(cleanPassword);
-    setVillageName(cleanVillageName);
-    setPoints(2000);
-    setPlacedItems([]);
-    setLastAnalysisResult(initialResult);
-    setAnalysisHistory([]);
-    setIsLoggedIn(true);
-
-    // Reset signup inputs
-    setSignUpId('');
-    setSignUpPassword('');
-    setSignUpVillageName('');
-    setIsSignUpMode(false);
   };
 
   // Reset village back to empty sandbox (Excellent debugging utility)
@@ -424,11 +458,34 @@ export default function App() {
     setActiveOverlay('detail'); // Automatically open detail sheet on complete
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      // 1. Call server-side logout API and wait for it properly (Await requirement)
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+    } catch (e) {
+      console.warn('Backend session cleanup failed, performing client-side hard cleanup.', e);
+    }
+
+    // 2. Clear all residual states to null/empty completely (State initialization requirement)
     setIsLoggedIn(false);
+    setUserId('');
     setPassword('');
+    setVillageName('');
+    setPoints(2000);
+    setPlacedItems([]);
+    setLastAnalysisResult(initialResult);
+    setAnalysisHistory([]);
+    setSelectedItemToPlace(null);
+    setError(null);
     setActiveOverlay('none');
-    alert('👋 안전하게 로그아웃되었습니다.');
+
+    // 3. Prevent rendering issues/caches by confirming complete state wipe
+    alert('👋 안전하게 로그아웃되었습니다. 브라우저에 남아있던 유저 세션 및 게임 상태가 완전히 초기화되었습니다.');
   };
 
   // Statistics calculations

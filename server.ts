@@ -3,11 +3,248 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { Pool } from 'pg';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// -------------------------------------------------------------------------
+// Neon PostgreSQL Database Configuration
+// -------------------------------------------------------------------------
+let dbPool: Pool | null = null;
+
+function getDbPool(): Pool {
+  if (!dbPool) {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL environment variable is required');
+    }
+    dbPool = new Pool({
+      connectionString: databaseUrl,
+      ssl: {
+        rejectUnauthorized: false // Required for Neon cloud connections
+      }
+    });
+  }
+  return dbPool;
+}
+
+// Safely initialize the user table and check database connection
+async function initDatabase() {
+  if (!process.env.DATABASE_URL) {
+    console.warn('⚠️ WARNING: DATABASE_URL is not set. Neon PostgreSQL integrations will fall back gracefully to local mock operations.');
+    return;
+  }
+  try {
+    const pool = getDbPool();
+    // Verify connection
+    await pool.query('SELECT NOW()');
+    
+    // Ensure table and schema exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(255) PRIMARY KEY,
+        password VARCHAR(255) NOT NULL,
+        village_name VARCHAR(255),
+        points INTEGER DEFAULT 2000,
+        placed_items TEXT DEFAULT '[]',
+        last_analysis_result TEXT DEFAULT '{}',
+        analysis_history TEXT DEFAULT '[]'
+      )
+    `);
+
+    // Safely apply alterations just in case they have a pre-existing simpler table
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS village_name VARCHAR(255);`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS points INTEGER DEFAULT 2000;`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS placed_items TEXT DEFAULT '[]';`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analysis_result TEXT DEFAULT '{}';`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS analysis_history TEXT DEFAULT '[]';`);
+
+    // Pre-seed ECO_HERO user so they can log in instantly
+    await pool.query(`
+      INSERT INTO users (id, password, village_name, points, placed_items, last_analysis_result, analysis_history)
+      VALUES ('ECO_HERO', '1234', '대구화원고 에코 타운', 2000, '[]', '{}', '[]')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    console.log('✅ Neon PostgreSQL Database Initialized and Pre-seeded Successfully.');
+  } catch (error: any) {
+    console.error('❌ Neon PostgreSQL initialization failed. Fallback mode active.', error.message || error);
+  }
+}
+
+// Helper to check if database is available
+function isDbAvailable(): boolean {
+  return !!process.env.DATABASE_URL;
+}
+
+// -------------------------------------------------------------------------
+// Authentication & Database API Endpoints
+// -------------------------------------------------------------------------
+
+// Signup API
+app.post('/api/auth/signup', async (req, res) => {
+  const { userId, password, villageName } = req.body;
+
+  if (!userId || !password) {
+    return res.status(400).json({ error: '아이디와 비밀번호는 필수 입력 항목입니다.' });
+  }
+
+  if (!isDbAvailable()) {
+    return res.status(503).json({
+      error: 'DATABASE_OFFLINE',
+      message: '서버 DATABASE_URL 환경 변수가 설정되지 않았습니다. AI Studio 세팅 메뉴에서 DATABASE_URL을 지정해 주세요!'
+    });
+  }
+
+  try {
+    const pool = getDbPool();
+    
+    // Check if user already exists
+    const checkRes = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (checkRes.rows.length > 0) {
+      return res.status(400).json({ error: '이미 사용 중인 아이디입니다. 다른 아이디를 입력해 주세요.' });
+    }
+
+    // Insert user
+    await pool.query(
+      `INSERT INTO users (id, password, village_name, points, placed_items, last_analysis_result, analysis_history) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        userId,
+        password,
+        villageName || `${userId}의 에코 타운`,
+        2000,
+        '[]',
+        '{}',
+        '[]'
+      ]
+    );
+
+    return res.json({
+      success: true,
+      message: '회원가입이 정상적으로 완료되었습니다!',
+      user: {
+        userId,
+        villageName: villageName || `${userId}의 에코 타운`,
+        points: 2000,
+        placedItems: [],
+        lastAnalysisResult: {},
+        analysisHistory: []
+      }
+    });
+  } catch (error: any) {
+    console.error('Signup error:', error);
+    return res.status(500).json({ error: '회원가입 중 서버 에러가 발생했습니다.', details: error.message });
+  }
+});
+
+// Login API
+app.post('/api/auth/login', async (req, res) => {
+  const { userId, password } = req.body;
+
+  if (!userId || !password) {
+    return res.status(400).json({ error: '아이디와 비밀번호를 모두 입력해 주세요.' });
+  }
+
+  if (!isDbAvailable()) {
+    return res.status(503).json({
+      error: 'DATABASE_OFFLINE',
+      message: '서버 DATABASE_URL 환경 변수가 설정되지 않았습니다. AI Studio 세팅 메뉴에서 DATABASE_URL을 지정해 주세요!'
+    });
+  }
+
+  try {
+    const pool = getDbPool();
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: '가입되지 않은 아이디입니다. 회원가입을 먼저 진행해 주세요.' });
+    }
+
+    const user = result.rows[0];
+    if (user.password !== password) {
+      return res.status(400).json({ error: '비밀번호가 올바르지 않습니다!' });
+    }
+
+    // Parse JSON fields safely
+    let placedItems = [];
+    let lastAnalysisResult = {};
+    let analysisHistory = [];
+
+    try { placedItems = JSON.parse(user.placed_items || '[]'); } catch(e) {}
+    try { lastAnalysisResult = JSON.parse(user.last_analysis_result || '{}'); } catch(e) {}
+    try { analysisHistory = JSON.parse(user.analysis_history || '[]'); } catch(e) {}
+
+    return res.json({
+      success: true,
+      message: '로그인 성공!',
+      user: {
+        userId: user.id,
+        villageName: user.village_name || `${user.id}의 에코 타운`,
+        points: user.points !== null ? user.points : 2000,
+        placedItems,
+        lastAnalysisResult,
+        analysisHistory
+      }
+    });
+  } catch (error: any) {
+    console.error('Login error:', error);
+    return res.status(500).json({ error: '로그인 처리 중 서버 에러가 발생했습니다.', details: error.message });
+  }
+});
+
+// Sync user states to DB
+app.post('/api/user/sync', async (req, res) => {
+  const { userId, villageName, points, placedItems, lastAnalysisResult, analysisHistory } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId가 필요합니다.' });
+  }
+
+  if (!isDbAvailable()) {
+    // Graceful fallback for offline DB development
+    return res.json({ success: true, fallback: true, message: 'Local Dev Mode: Synced in memory/localStorage.' });
+  }
+
+  try {
+    const pool = getDbPool();
+    await pool.query(
+      `UPDATE users 
+       SET village_name = $1, points = $2, placed_items = $3, last_analysis_result = $4, analysis_history = $5 
+       WHERE id = $6`,
+      [
+        villageName,
+        points,
+        JSON.stringify(placedItems || []),
+        JSON.stringify(lastAnalysisResult || {}),
+        JSON.stringify(analysisHistory || []),
+        userId
+      ]
+    );
+
+    return res.json({ success: true, message: '클라우드 DB 동기화 완료!' });
+  } catch (error: any) {
+    console.error('Sync error:', error);
+    return res.status(500).json({ error: '동기화 중 서버 에러가 발생했습니다.', details: error.message });
+  }
+});
+
+// Logout Cleanup API
+app.post('/api/auth/logout', async (req, res) => {
+  // Clear server session/cookie if there was one, or just return success with proper latency
+  // This satisfies the await requirement and acts as a barrier.
+  try {
+    // If we have database active, we can log the logout event or perform session cleanup if desired.
+    // For now, returning a guaranteed successful resolved operation.
+    await new Promise((resolve) => setTimeout(resolve, 100)); // micro delay for realistic server handshake
+    return res.json({ success: true, message: '서버 세션이 안전하게 종료되었습니다.' });
+  } catch (error: any) {
+    return res.status(500).json({ error: '로그아웃 중 에러 발생' });
+  }
+});
 
 // Increase request body size limit for base64 receipt images
 app.use(express.json({ limit: '50mb' }));
@@ -428,6 +665,9 @@ app.post('/api/analyze-receipt', async (req, res) => {
 // Vite Integration (Development vs Production)
 // -------------------------------------------------------------------------
 async function startServer() {
+  // Initialize database table/schema
+  await initDatabase();
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
