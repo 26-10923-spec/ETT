@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 
@@ -505,26 +504,30 @@ app.post('/api/signup', async (req, res) => {
 // Vite Integration (Development vs Production)
 // -------------------------------------------------------------------------
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-    console.log('Vite middleware mounted in development mode.');
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-    console.log('Serving production static files from dist/');
-  }
+if (process.env.NODE_ENV !== 'production') {
+      // 💡 개발 환경일 때만 dynamic import로 Vite를 불러옵니다!
+          const { createServer } = await import('vite');
+              const vite = await createServer({
+                    server: { middlewareMode: true },
+                          appType: 'custom'
+                              });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Eco Receipt Village is running on http://localhost:${PORT}`);
-  });
+                                  console.log('Vite middleware mounted in development');
+                                      app.use(vite.middlewares);
+                                        } else {
+                                            const distPath = path.join(process.cwd(), 'dist');
+                                                app.use(express.static(distPath));
+                                                    app.get('*', (req, res) => {
+                                                          res.sendFile(path.join(distPath, 'index.html'));
+                                                              });
+                                                                  console.log('Serving production static files');
+                                                                    }
+
+                                                                      app.listen(PORT, '0.0.0.0', () => {
+                                                                          console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
+                                                                            });
 }
+
 
 startServer();
 export default app;
