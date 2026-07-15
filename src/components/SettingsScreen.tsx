@@ -1,6 +1,5 @@
 import React from 'react';
 import { X, User, RotateCcw, LogOut, Award, ClipboardList, Settings, Trees } from 'lucide-react';
-import LogoutButton from './LogoutButton';
 
 interface SettingsScreenProps {
   userId: string;
@@ -144,6 +143,3 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     </div>
   );
 };
-<div className="mt-4 flex justify-center">
-  <LogoutButton />
-</div>

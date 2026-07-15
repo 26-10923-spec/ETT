@@ -2,12 +2,7 @@ import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { neon } from '@neondatabase/serverless';
-import bcrypt from 'bcryptjs';
-
-// 첫 번째 사진에서 설정한 STORAGE_URL로 DB를 연결합니다.
-const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-const sql = neon(connectionString || '');
+import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
@@ -20,7 +15,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Initialize Gemini API
 const apiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI| null = null;
+let ai: GoogleGenAI | null = null;
 
 if (apiKey) {
   ai = new GoogleGenAI({
@@ -428,203 +423,30 @@ app.post('/api/analyze-receipt', async (req, res) => {
     });
   }
 });
-// ==========================================
-// 🔐 [추가] 회원가입 API
-// ==========================================
-app.post('/api/signup', async (req, res) => {
-  try {
-      const { username, password, villageName, score } = req.body;
-
-          if (!username || !password || !villageName) {
-                return res.status(400).json({ error: '모든 필드를 입력해주세요.' });
-                    }
-
-                        // 1. 비밀번호 안전하게 암호화하기
-                            const hashedPassword = await bcrypt.hash(password, 10);
-
-                                // 2. Vercel Neon DB에 저장하기
-                                    await sql`
-                                          INSERT INTO users (username, password_hash, village_name, score)
-                                                VALUES (${username}, ${hashedPassword}, ${villageName}, ${Number(score) || 0})
-                                                    `;
-
-                                                        res.status(201).json({ message: '회원가입이 완료되었습니다!' });
-                                                          } catch (error: any) {
-                                                              console.error('회원가입 에러:', error);
-                                                                  if (error.code === '23505') {
-                                                                        return res.status(400).json({ error: '이미 존재하는 아이디입니다.' });
-                                                                            }
-                                                                                res.status(500).json({ error: '서버 오류가 발생했습니다.' });
-                                                                                  }
-                                                                                  });
-
-                                                                                  // ==========================================
-                                                                                  // 🔑 [추가] 로그인 API
-                                                                                  // ==========================================
-                                                                                  app.post('/api/login', async (req, res) => {
-                                                                                    try {
-                                                                                        const { username, password } = req.body;
-
-                                                                                            if (!username || !password) {
-                                                                                                  return res.status(400).json({ error: '아이디와 비밀번호를 입력해주세요.' });
-                                                                                                      }
-
-                                                                                                          // 1. DB에서 아이디 찾기
-                                                                                                              const users = await sql`SELECT * FROM users WHERE username = ${username}`;
-
-                                                                                                                  if (users.length === 0) {
-                                                                                                                        return res.status(400).json({ error: '아이디 또는 비밀번호가 일치하지 않습니다.' });
-                                                                                                                            }
-
-                                                                                                                                const user = users[0];
-
-                                                                                                                                    // 2. 암호화된 비밀번호 비교하기
-                                                                                                                                        const isMatch = await bcrypt.compare(password, user.password_hash);
-
-                                                                                                                                            if (!isMatch) {
-                                                                                                                                                  return res.status(400).json({ error: '아이디 또는 비밀번호가 일치하지 않습니다.' });
-                                                                                                                                                      }
-
-                                                                                                                                                          // 3. 로그인 성공 시 유저 정보 전송
-                                                                                                                                                              res.status(200).json({
-                                                                                                                                                                    message: '로그인 성공!',
-                                                                                                                                                                          user: {
-                                                                                                                                                                                  username: user.username,
-                                                                                                                                                                                          village_name: user.village_name,
-                                                                                                                                                                                                  score: user.score
-                                                                                                                                                                                                        }
-                                                                                                                                                                                                            });
-                                                                                                                                                                                                              } catch (error) {
-                                                                                                                                                                                                                  console.error('로그인 에러:', error);
-                                                                                                                                                                                                                      res.status(500).json({ error: '서버 오류가 발생했습니다.' });
-                                                                                                                                                                                                                        }
-                                                                                                                                                                                                                        });
-                                                                                                                                                                                                                        // ⭕ 이 로그아웃 처리 코드를 새로 추가해주세요!
-
-app.post('/api/signup', async (req, res) => {
-  try {
-    // 회원가입 로직...
-  } catch (error) {
-    // 에러 처리...
-  }
-}); // 💡 이 닫는 괄호들이 잘 붙어있는지 꼭 확인하세요!
-                                                                                                                                                                                                                        app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('token', {
-    path: '/',
-    secure: true,      // Vercel 배포 환경 필수
-    sameSite: 'none'   // 크로스 도메인 환경 필수
-  });
-  return res.status(200).json({ message: '로그아웃 성공' });
-});
-
-                                                                                                                                                                                                                        
 
 // -------------------------------------------------------------------------
 // Vite Integration (Development vs Production)
 // -------------------------------------------------------------------------
-// --- 로그아웃 API 추가 ---
-app.post('/api/auth/logout', async (req, res) => {
-  try {
-    const sessionToken = req.cookies?.session_token;
-
-    if (sessionToken) {
-      // Neon DB에서 세션 삭제
-      await sql`
-        DELETE FROM user_sessions 
-        WHERE session_token = ${sessionToken}
-      `;
-    }
-
-    // 브라우저 쿠키 삭제
-    res.clearCookie('session_token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-    });
-
-    return res.status(200).json({ success: true, message: '로그아웃 성공' });
-  } catch (error) {
-    console.error('로그아웃 처리 중 에러:', error);
-    res.clearCookie('session_token', { path: '/' });
-    return res.status(500).json({ error: '로그아웃 에러 발생' });
-  }
-});
-// ... (기존 API 코드들) ...
-
-// ================= [여기서부터 복사해서 붙여넣으세요!] =================
-app.post('/api/auth/logout', async (req, res) => {
-  try {
-    const token = req.cookies?.token;
-
-    if (token) {
-      try {
-        await sql`
-          DELETE FROM user_sessions 
-          WHERE session_token = ${token}
-        `;
-      } catch (dbError) {
-        console.log('DB 세션 삭제 건너뜀:', dbError);
-      }
-    }
-
-    // 일반 환경용 쿠키 'token' 삭제
-    res.clearCookie('token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-    });
-
-    // Codespaces 등 프록시 개발 환경용 쿠키 'token' 삭제
-    res.clearCookie('token', {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-      path: '/',
-    });
-
-    return res.status(200).json({ success: true, message: '로그아웃 성공' });
-  } catch (error) {
-    console.error('로그아웃 에러:', error);
-    res.clearCookie('token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/' });
-    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'none', path: '/' });
-    return res.status(500).json({ error: '로그아웃 에러 발생' });
-  }
-});
-// ===================================================================
-
-// 🌟 기존에 맨 아래에 있던 이 함수 바로 위에 자리 잡으면 성공입니다!
 async function startServer() {
-  const distPath = path.join(process.cwd(), 'dist');
-  // ... 생략
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+    console.log('Vite middleware mounted in development mode.');
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+    console.log('Serving production static files from dist/');
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Eco Receipt Village is running on http://localhost:${PORT}`);
+  });
 }
-if (process.env.NODE_ENV !== 'production') {
-      // 💡 개발 환경일 때만 dynamic import로 Vite를 불러옵니다!
-          const { createServer } = await import('vite');
-              const vite = await createServer({
-                    server: { middlewareMode: true },
-                          appType: 'custom'
-                              });
-
-                                  console.log('Vite middleware mounted in development');
-                                      app.use(vite.middlewares);
-                                        } else {
-                                            const distPath = path.join(process.cwd(), 'dist');
-                                                app.use(express.static(distPath));
-                                                    app.get('*', (req, res) => {
-                                                          res.sendFile(path.join(distPath, 'index.html'));
-                                                              });
-                                                                  console.log('Serving production static files');
-                                                                    }
-                                                                    if (process.env.NODE_ENV !== 'production') {
-                                                                        app.listen(PORT, '0.0.0.0', () => {
-                                                                            console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
-                                                                              });}
-                                        
-
-
-
 
 startServer();
-export default app;
