@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&family=Poor+Story&family=Inter:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'DungGeunMo';
+  src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_six@1.2/DungGeunMo.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@theme {
+  --font-sans: "DungGeunMo", "Gaegu", "Inter", sans-serif;
+  --font-game: "DungGeunMo", "Gaegu", cursive;
+}
+
+/* Custom hand-drawn comic styles */
+.comic-border {
+  border: 3.5px solid #111827;
+}
+
+.comic-border-thin {
+  border: 2px solid #111827;
+}
+
+.comic-shadow {
+  box-shadow: 5px 5px 0px 0px #111827;
+}
+
+.comic-shadow-sm {
+  box-shadow: 3px 3px 0px 0px #111827;
+}
+
+.comic-shadow-lg {
+  box-shadow: 8px 8px 0px 0px #111827;
+}
+
+.comic-button {
+  border: 3.5px solid #111827;
+  box-shadow: 4px 4px 0px 0px #111827;
+  transition: all 0.1s ease-in-out;
+}
+
+.comic-button:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0px 0px #111827;
+}
+
+.comic-button:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px 0px #111827;
+}
+

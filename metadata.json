@@ -1,0 +1,6 @@
+{
+  "name": "Eco Receipt Village",
+  "description": "유저가 제출한 영수증을 AI가 분석하여 탄소 배출량에 따라 기후 재해(가뭄, 홍수)로부터 마을을 구하고 가꾸는 친환경 게이미피케이션 플랫폼",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
