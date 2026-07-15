@@ -522,27 +522,15 @@ if (process.env.NODE_ENV !== 'production') {
                                                               });
                                                                   console.log('Serving production static files');
                                                                     }
+                                                                    if (process.env.NODE_ENV !== 'production') {
+                                                                        app.listen(PORT, '0.0.0.0', () => {
+                                                                            console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
+                                                                              });
+                                                                              }
+                                                                    }
 
-                                                                      app.listen(PORT, '0.0.0.0', () => {
-                                                                          console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
-                                                                            });
-}
+
 
 
 startServer();
 export default app;
-
-// ❌ 기존 코드 (서버가 무조건 app.listen을 실행해서 Vercel에서 터짐)
-/*
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
-  });
-  */
-
-  //  이렇게 수정해 줍니다!
-  if (process.env.NODE_ENV !== 'production') {
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`🚀 Eco Receipt Village is running on port ${PORT}`);
-          });
-          }
-          
