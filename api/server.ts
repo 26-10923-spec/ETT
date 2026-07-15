@@ -504,6 +504,35 @@ app.post('/api/signup', async (req, res) => {
 // -------------------------------------------------------------------------
 // Vite Integration (Development vs Production)
 // -------------------------------------------------------------------------
+// --- 로그아웃 API 추가 ---
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const sessionToken = req.cookies?.session_token;
+
+    if (sessionToken) {
+      // Neon DB에서 세션 삭제
+      await sql`
+        DELETE FROM user_sessions 
+        WHERE session_token = ${sessionToken}
+      `;
+    }
+
+    // 브라우저 쿠키 삭제
+    res.clearCookie('session_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
+
+    return res.status(200).json({ success: true, message: '로그아웃 성공' });
+  } catch (error) {
+    console.error('로그아웃 처리 중 에러:', error);
+    res.clearCookie('session_token', { path: '/' });
+    return res.status(500).json({ error: '로그아웃 에러 발생' });
+  }
+});
+
 async function startServer() {
 if (process.env.NODE_ENV !== 'production') {
       // 💡 개발 환경일 때만 dynamic import로 Vite를 불러옵니다!
