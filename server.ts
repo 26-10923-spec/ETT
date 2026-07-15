@@ -3,6 +3,11 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { neon } from '@neondatabase/serverless';
+import bcrypt from 'bcryptjs';
+
+// 첫 번째 사진에서 설정한 STORAGE_URL로 DB를 연결합니다.
+const sql = neon(process.env.STORAGE_URL!);
 
 dotenv.config();
 
@@ -15,7 +20,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Initialize Gemini API
 const apiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI | null = null;
+let ai: GoogleGenAI| null = null;
 
 if (apiKey) {
   ai = new GoogleGenAI({
@@ -423,6 +428,78 @@ app.post('/api/analyze-receipt', async (req, res) => {
     });
   }
 });
+// ==========================================
+// 🔐 [추가] 회원가입 API
+// ==========================================
+app.post('/api/signup', async (req, res) => {
+  try {
+      const { username, password, villageName, score } = req.body;
+
+          if (!username || !password || !villageName) {
+                return res.status(400).json({ error: '모든 필드를 입력해주세요.' });
+                    }
+
+                        // 1. 비밀번호 안전하게 암호화하기
+                            const hashedPassword = await bcrypt.hash(password, 10);
+
+                                // 2. Vercel Neon DB에 저장하기
+                                    await sql`
+                                          INSERT INTO users (username, password_hash, village_name, score)
+                                                VALUES (${username}, ${hashedPassword}, ${villageName}, ${Number(score) || 0})
+                                                    `;
+
+                                                        res.status(201).json({ message: '회원가입이 완료되었습니다!' });
+                                                          } catch (error: any) {
+                                                              console.error('회원가입 에러:', error);
+                                                                  if (error.code === '23505') {
+                                                                        return res.status(400).json({ error: '이미 존재하는 아이디입니다.' });
+                                                                            }
+                                                                                res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+                                                                                  }
+                                                                                  });
+
+                                                                                  // ==========================================
+                                                                                  // 🔑 [추가] 로그인 API
+                                                                                  // ==========================================
+                                                                                  app.post('/api/login', async (req, res) => {
+                                                                                    try {
+                                                                                        const { username, password } = req.body;
+
+                                                                                            if (!username || !password) {
+                                                                                                  return res.status(400).json({ error: '아이디와 비밀번호를 입력해주세요.' });
+                                                                                                      }
+
+                                                                                                          // 1. DB에서 아이디 찾기
+                                                                                                              const users = await sql`SELECT * FROM users WHERE username = ${username}`;
+
+                                                                                                                  if (users.length === 0) {
+                                                                                                                        return res.status(400).json({ error: '아이디 또는 비밀번호가 일치하지 않습니다.' });
+                                                                                                                            }
+
+                                                                                                                                const user = users[0];
+
+                                                                                                                                    // 2. 암호화된 비밀번호 비교하기
+                                                                                                                                        const isMatch = await bcrypt.compare(password, user.password_hash);
+
+                                                                                                                                            if (!isMatch) {
+                                                                                                                                                  return res.status(400).json({ error: '아이디 또는 비밀번호가 일치하지 않습니다.' });
+                                                                                                                                                      }
+
+                                                                                                                                                          // 3. 로그인 성공 시 유저 정보 전송
+                                                                                                                                                              res.status(200).json({
+                                                                                                                                                                    message: '로그인 성공!',
+                                                                                                                                                                          user: {
+                                                                                                                                                                                  username: user.username,
+                                                                                                                                                                                          village_name: user.village_name,
+                                                                                                                                                                                                  score: user.score
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                            });
+                                                                                                                                                                                                              } catch (error) {
+                                                                                                                                                                                                                  console.error('로그인 에러:', error);
+                                                                                                                                                                                                                      res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                        });
+                                                                                                                                                                                                                        
 
 // -------------------------------------------------------------------------
 // Vite Integration (Development vs Production)
