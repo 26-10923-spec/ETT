@@ -471,15 +471,28 @@ export const ReceiptScanner: React.FC<ReceiptScannerProps> = ({
       {analyzedResult ? (
         <div className="p-6 space-y-5 max-h-[520px] overflow-y-auto font-game">
           
-          <div className="bg-emerald-50 border-[2.5px] border-black p-4 rounded-2xl flex items-start space-x-3 text-xs leading-relaxed shadow-sm">
-            <Sparkles className="w-5 h-5 text-emerald-600 shrink-0" />
-            <div>
-              <p className="font-black text-slate-900">🔍 제미나이 AI 스캔 가이드</p>
-              <p className="text-slate-600 font-bold mt-1">
-                기밀 유지 및 환경 보호 점수 산출을 위해 OCR이 임시 추출한 내용입니다. 실제 영수증 정보와 다를 경우 아래에서 마트명과 품목을 직접 클릭하여 수정하세요.
-              </p>
+          {analyzedResult.is_fallback ? (
+            <div className="bg-amber-50 border-[2.5px] border-amber-500 p-4 rounded-2xl flex items-start space-x-3 text-xs leading-relaxed shadow-sm">
+              <Sparkles className="w-5 h-5 text-amber-600 shrink-0 animate-pulse" />
+              <div>
+                <p className="font-black text-amber-950">⚠️ 제미나이 AI 가상 시뮬레이션 판독 작동 중</p>
+                <p className="text-amber-800 font-bold mt-1">
+                  현재 제미나이 AI API의 일일 무료 요청 제한(Quota)으로 인해 임시 스마트 시뮬레이션 판독이 적용되었습니다. 
+                  <span className="text-rose-600 underline ml-1 font-black">실제 영수증의 마트명과 품목이 다르다면 하단 정보창을 클릭하여 원하는 품목으로 직접 자유롭게 추가/수정해 보세요!</span>
+                </p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-emerald-50 border-[2.5px] border-black p-4 rounded-2xl flex items-start space-x-3 text-xs leading-relaxed shadow-sm">
+              <Sparkles className="w-5 h-5 text-emerald-600 shrink-0" />
+              <div>
+                <p className="font-black text-slate-900">🔍 제미나이 AI 스캔 가이드</p>
+                <p className="text-slate-600 font-bold mt-1">
+                  제미나이 AI가 영수증 정보를 판독하여 분석한 결과입니다. 실제 영수증 정보와 다를 경우 아래에서 마트명과 품목을 직접 클릭하여 자유롭게 수정해 보세요.
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
             {/* Left Panel: Preview image & Core Score summary */}

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
@@ -7,8 +8,59 @@ import { Pool } from 'pg';
 
 dotenv.config();
 
+const LOCAL_DB_PATH = path.join(process.cwd(), 'users_db.json');
+
+interface LocalUser {
+  id: string;
+  password?: string;
+  village_name?: string;
+  points?: number;
+  placed_items?: string;
+  last_analysis_result?: string;
+  analysis_history?: string;
+}
+
+// Ensure the local database file exists and is populated
+function loadLocalUsers(): Record<string, LocalUser> {
+  try {
+    if (fs.existsSync(LOCAL_DB_PATH)) {
+      const data = fs.readFileSync(LOCAL_DB_PATH, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error('Failed to read local users DB, resetting:', e);
+  }
+  
+  // Seed initial user
+  const initial: Record<string, LocalUser> = {
+    'ECO_HERO': {
+      id: 'ECO_HERO',
+      password: '1234',
+      village_name: '대구화원고 에코 타운',
+      points: 2000,
+      placed_items: '[]',
+      last_analysis_result: '{}',
+      analysis_history: '[]'
+    }
+  };
+  saveLocalUsers(initial);
+  return initial;
+}
+
+function saveLocalUsers(users: Record<string, LocalUser>) {
+  try {
+    fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to write local users DB:', e);
+  }
+}
+
 const app = express();
 const PORT = 3000;
+
+// Increase request body size limit for base64 receipt images
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // -------------------------------------------------------------------------
 // Neon PostgreSQL Database Configuration
@@ -92,40 +144,70 @@ app.post('/api/auth/signup', async (req, res) => {
     return res.status(400).json({ error: '아이디와 비밀번호는 필수 입력 항목입니다.' });
   }
 
-  if (!isDbAvailable()) {
-    return res.status(503).json({
-      error: 'DATABASE_OFFLINE',
-      message: '서버 DATABASE_URL 환경 변수가 설정되지 않았습니다. AI Studio 세팅 메뉴에서 DATABASE_URL을 지정해 주세요!'
-    });
+  // 1. If DATABASE_URL is available, try Neon PostgreSQL
+  if (isDbAvailable()) {
+    try {
+      const pool = getDbPool();
+      
+      // Check if user already exists
+      const checkRes = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+      if (checkRes.rows.length > 0) {
+        return res.status(400).json({ error: '이미 사용 중인 아이디입니다. 다른 아이디를 입력해 주세요.' });
+      }
+
+      // Insert user
+      await pool.query(
+        `INSERT INTO users (id, password, village_name, points, placed_items, last_analysis_result, analysis_history) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          userId,
+          password,
+          villageName || `${userId}의 에코 타운`,
+          2000,
+          '[]',
+          '{}',
+          '[]'
+        ]
+      );
+
+      return res.json({
+        success: true,
+        message: '회원가입이 정상적으로 완료되었습니다! (클라우드 DB 저장 완료)',
+        user: {
+          userId,
+          villageName: villageName || `${userId}의 에코 타운`,
+          points: 2000,
+          placedItems: [],
+          lastAnalysisResult: {},
+          analysisHistory: []
+        }
+      });
+    } catch (dbError: any) {
+      console.warn('⚠️ Neon PG Signup failed, falling back to Local JSON DB:', dbError.message || dbError);
+    }
   }
 
+  // 2. Fallback to Local file-based DB
   try {
-    const pool = getDbPool();
-    
-    // Check if user already exists
-    const checkRes = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
-    if (checkRes.rows.length > 0) {
-      return res.status(400).json({ error: '이미 사용 중인 아이디입니다. 다른 아이디를 입력해 주세요.' });
+    const localUsers = loadLocalUsers();
+    if (localUsers[userId]) {
+      return res.status(400).json({ error: '이미 사용 중인 아이디입니다. 다른 아이디를 입력해 주세요. (로컬 백업)' });
     }
 
-    // Insert user
-    await pool.query(
-      `INSERT INTO users (id, password, village_name, points, placed_items, last_analysis_result, analysis_history) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        userId,
-        password,
-        villageName || `${userId}의 에코 타운`,
-        2000,
-        '[]',
-        '{}',
-        '[]'
-      ]
-    );
+    localUsers[userId] = {
+      id: userId,
+      password: password,
+      village_name: villageName || `${userId}의 에코 타운`,
+      points: 2000,
+      placed_items: '[]',
+      last_analysis_result: '{}',
+      analysis_history: '[]'
+    };
+    saveLocalUsers(localUsers);
 
     return res.json({
       success: true,
-      message: '회원가입이 정상적으로 완료되었습니다!',
+      message: '회원가입이 완료되었습니다! (서버 로컬 데이터베이스에 저장)',
       user: {
         userId,
         villageName: villageName || `${userId}의 에코 타운`,
@@ -135,9 +217,9 @@ app.post('/api/auth/signup', async (req, res) => {
         analysisHistory: []
       }
     });
-  } catch (error: any) {
-    console.error('Signup error:', error);
-    return res.status(500).json({ error: '회원가입 중 서버 에러가 발생했습니다.', details: error.message });
+  } catch (err: any) {
+    console.error('Local signup error:', err);
+    return res.status(500).json({ error: '회원가입 처리 중 오류가 발생했습니다.', details: err.message });
   }
 });
 
@@ -149,27 +231,57 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ error: '아이디와 비밀번호를 모두 입력해 주세요.' });
   }
 
-  if (!isDbAvailable()) {
-    return res.status(503).json({
-      error: 'DATABASE_OFFLINE',
-      message: '서버 DATABASE_URL 환경 변수가 설정되지 않았습니다. AI Studio 세팅 메뉴에서 DATABASE_URL을 지정해 주세요!'
-    });
+  // 1. Try Neon PG if available
+  if (isDbAvailable()) {
+    try {
+      const pool = getDbPool();
+      const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+
+      if (result.rows.length > 0) {
+        const user = result.rows[0];
+        if (user.password !== password) {
+          return res.status(400).json({ error: '비밀번호가 올바르지 않습니다!' });
+        }
+
+        let placedItems = [];
+        let lastAnalysisResult = {};
+        let analysisHistory = [];
+
+        try { placedItems = JSON.parse(user.placed_items || '[]'); } catch(e) {}
+        try { lastAnalysisResult = JSON.parse(user.last_analysis_result || '{}'); } catch(e) {}
+        try { analysisHistory = JSON.parse(user.analysis_history || '[]'); } catch(e) {}
+
+        return res.json({
+          success: true,
+          message: '로그인 성공! (클라우드 DB)',
+          user: {
+            userId: user.id,
+            villageName: user.village_name || `${user.id}의 에코 타운`,
+            points: user.points !== null ? user.points : 2000,
+            placedItems,
+            lastAnalysisResult,
+            analysisHistory
+          }
+        });
+      }
+    } catch (dbError: any) {
+      console.warn('⚠️ Neon PG Login failed, checking Local JSON DB:', dbError.message || dbError);
+    }
   }
 
+  // 2. Fallback to Local file-based DB
   try {
-    const pool = getDbPool();
-    const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const localUsers = loadLocalUsers();
+    const user = localUsers[userId];
 
-    if (result.rows.length === 0) {
+    if (!user) {
       return res.status(400).json({ error: '가입되지 않은 아이디입니다. 회원가입을 먼저 진행해 주세요.' });
     }
 
-    const user = result.rows[0];
     if (user.password !== password) {
       return res.status(400).json({ error: '비밀번호가 올바르지 않습니다!' });
     }
 
-    // Parse JSON fields safely
     let placedItems = [];
     let lastAnalysisResult = {};
     let analysisHistory = [];
@@ -180,7 +292,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     return res.json({
       success: true,
-      message: '로그인 성공!',
+      message: '로그인 성공! (서버 로컬 데이터베이스)',
       user: {
         userId: user.id,
         villageName: user.village_name || `${user.id}의 에코 타운`,
@@ -190,9 +302,9 @@ app.post('/api/auth/login', async (req, res) => {
         analysisHistory
       }
     });
-  } catch (error: any) {
-    console.error('Login error:', error);
-    return res.status(500).json({ error: '로그인 처리 중 서버 에러가 발생했습니다.', details: error.message });
+  } catch (err: any) {
+    console.error('Local login error:', err);
+    return res.status(500).json({ error: '로그인 처리 중 오류가 발생했습니다.', details: err.message });
   }
 });
 
@@ -204,31 +316,53 @@ app.post('/api/user/sync', async (req, res) => {
     return res.status(400).json({ error: 'userId가 필요합니다.' });
   }
 
-  if (!isDbAvailable()) {
-    // Graceful fallback for offline DB development
-    return res.json({ success: true, fallback: true, message: 'Local Dev Mode: Synced in memory/localStorage.' });
+  let dbSynced = false;
+
+  // 1. Try cloud DB sync
+  if (isDbAvailable()) {
+    try {
+      const pool = getDbPool();
+      await pool.query(
+        `UPDATE users 
+         SET village_name = $1, points = $2, placed_items = $3, last_analysis_result = $4, analysis_history = $5 
+         WHERE id = $6`,
+        [
+          villageName,
+          points,
+          JSON.stringify(placedItems || []),
+          JSON.stringify(lastAnalysisResult || {}),
+          JSON.stringify(analysisHistory || []),
+          userId
+        ]
+      );
+      dbSynced = true;
+    } catch (dbError: any) {
+      console.warn('⚠️ Neon PG Sync failed, updating Local JSON DB instead:', dbError.message || dbError);
+    }
   }
 
+  // 2. Always sync/save to local JSON DB as backup/fallback
   try {
-    const pool = getDbPool();
-    await pool.query(
-      `UPDATE users 
-       SET village_name = $1, points = $2, placed_items = $3, last_analysis_result = $4, analysis_history = $5 
-       WHERE id = $6`,
-      [
-        villageName,
-        points,
-        JSON.stringify(placedItems || []),
-        JSON.stringify(lastAnalysisResult || {}),
-        JSON.stringify(analysisHistory || []),
-        userId
-      ]
-    );
+    const localUsers = loadLocalUsers();
+    localUsers[userId] = {
+      ...(localUsers[userId] || {}),
+      id: userId,
+      village_name: villageName,
+      points: points,
+      placed_items: JSON.stringify(placedItems || []),
+      last_analysis_result: JSON.stringify(lastAnalysisResult || {}),
+      analysis_history: JSON.stringify(analysisHistory || [])
+    };
+    saveLocalUsers(localUsers);
 
-    return res.json({ success: true, message: '클라우드 DB 동기화 완료!' });
-  } catch (error: any) {
-    console.error('Sync error:', error);
-    return res.status(500).json({ error: '동기화 중 서버 에러가 발생했습니다.', details: error.message });
+    return res.json({
+      success: true,
+      message: dbSynced ? '클라우드 DB 및 로컬 동기화 완료!' : '로컬 데이터베이스 동기화 완료 (클라우드 DB 오프라인)',
+      fallback: !dbSynced
+    });
+  } catch (err: any) {
+    console.error('Local sync write error:', err);
+    return res.status(500).json({ error: '동기화 데이터 처리 중 오류가 발생했습니다.', details: err.message });
   }
 });
 
@@ -246,9 +380,6 @@ app.post('/api/auth/logout', async (req, res) => {
   }
 });
 
-// Increase request body size limit for base64 receipt images
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Initialize Gemini API
 const apiKey = process.env.GEMINI_API_KEY;
@@ -505,13 +636,48 @@ app.post('/api/analyze-receipt', async (req, res) => {
           { keyword: "닭고기", type: "Yellow", score_change: -10, point_change: -200 }
         );
       } else if (matched_items.length === 0) {
-        // Safe default items for miscellaneous files
-        matched_items.push(
-          { keyword: "두부", type: "Green", score_change: 10, point_change: 300 },
-          { keyword: "닭고기", type: "Yellow", score_change: -10, point_change: -200 },
-          { keyword: "비닐봉투", type: "Red", score_change: -15, point_change: -300 },
-          { keyword: "사과", type: "Green", score_change: 20, point_change: 500 }
-        );
+        // Safe, varied realistic presets so the user gets a dynamic experience each time
+        const presets = [
+          [
+            { keyword: "국산 유기농 두부 1모", type: "Green", score_change: 10, point_change: 300 },
+            { keyword: "신선 닭고기 가슴살 500g", type: "Yellow", score_change: -10, point_change: -200 },
+            { keyword: "일회용 비닐 쇼핑백", type: "Red", score_change: -15, point_change: -300 },
+            { keyword: "대구 로컬푸드 부사 사과", type: "Green", score_change: 20, point_change: 500 }
+          ],
+          [
+            { keyword: "국산 친환경 방울토마토 1팩", type: "Green", score_change: 20, point_change: 500 },
+            { keyword: "무농약 상추 200g", type: "Green", score_change: 15, point_change: 400 },
+            { keyword: "친환경 다회용 캔버스 에코백", type: "Green", score_change: 15, point_change: 400 },
+            { keyword: "국산 햇 고구마 1.5kg", type: "Green", score_change: 15, point_change: 400 }
+          ],
+          [
+            { keyword: "소고기 등심 구이용 300g", type: "Red", score_change: -25, point_change: -500 },
+            { keyword: "팽이버섯 & 새송이버섯 팩", type: "Green", score_change: 15, point_change: 400 },
+            { keyword: "일회용 종이컵 50개입", type: "Red", score_change: -15, point_change: -300 }
+          ],
+          [
+            { keyword: "수입 바나나 1송이", type: "Yellow", score_change: -10, point_change: -200 },
+            { keyword: "신선 특란 계란 10구", type: "Yellow", score_change: -10, point_change: -200 },
+            { keyword: "로컬푸드 무농약 오이 3입", type: "Green", score_change: 15, point_change: 400 }
+          ],
+          [
+            { keyword: "한돈 삼겹살 구이용 500g", type: "Yellow", score_change: -10, point_change: -200 },
+            { keyword: "국산 유기농 낫또 2팩", type: "Green", score_change: 15, point_change: 400 },
+            { keyword: "배달용 일회용 비닐봉투", type: "Red", score_change: -15, point_change: -300 },
+            { keyword: "제철 친환경 참외 1봉", type: "Green", score_change: 20, point_change: 500 }
+          ]
+        ];
+
+        // Deterministic hash based on filename or current timestamp to guarantee dynamic rotation
+        let hash = 0;
+        const seedStr = (filename || '') + String(Date.now());
+        for (let i = 0; i < seedStr.length; i++) {
+          hash = seedStr.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const index = Math.abs(hash) % presets.length;
+        const selectedPreset = presets[index];
+
+        matched_items.push(...selectedPreset);
       }
 
       // Re-calculate results based on compiled items
@@ -533,6 +699,10 @@ app.post('/api/analyze-receipt', async (req, res) => {
       const approval_number = Math.floor(10000000 + Math.random() * 90000000).toString();
       const transaction_date = new Date().toISOString().replace('T', ' ').substring(0, 16);
 
+      // Detect if the error was a quota limitation
+      const errStr = String(apiError.message || apiError).toLowerCase();
+      const isQuota = errStr.includes('quota') || errStr.includes('limit') || errStr.includes('rate') || errStr.includes('429');
+
       resultJson = {
         detected_text_raw: `[Dynamic OCR Fallback]\n마트명: ${detectedStore}\n일시: ${transaction_date}\n` + matched_items.map(i => `- ${i.keyword} (${i.type})`).join('\n') + `\n승인번호: ${approval_number}`,
         matched_items,
@@ -550,7 +720,9 @@ app.post('/api/analyze-receipt', async (req, res) => {
         recommendations: [
           "비닐봉투와 일회용 컵 대신 다회용 에코백과 텀블러를 상시 지참하면 온실가스 배출을 크게 차감할 수 있습니다!",
           "탄소 배출이 높은 육류 소비를 국산 두부나 제철 친환경 로컬 농산물로 대체해 보세요."
-        ]
+        ],
+        is_fallback: true,
+        fallback_reason: isQuota ? "quota" : "general"
       };
     }
 
@@ -647,7 +819,9 @@ app.post('/api/analyze-receipt', async (req, res) => {
         shop_available: true,
         status_message: status_message
       },
-      recommendations: resultJson.recommendations || []
+      recommendations: resultJson.recommendations || [],
+      is_fallback: resultJson.is_fallback || false,
+      fallback_reason: resultJson.fallback_reason || ""
     };
 
     return res.json(finalResponse);

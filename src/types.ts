@@ -35,6 +35,8 @@ export interface ReceiptAnalysisResult {
   scoring: ScoringInfo;
   game_village_status: GameVillageStatus;
   recommendations: string[];
+  is_fallback?: boolean;
+  fallback_reason?: string;
 }
 
 export interface DecorationItem {
